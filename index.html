@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mon FPS HTML5 - Multi P2P</title>
+    <title>Mon FPS HTML5 - Déplacements & Multi P2P</title>
     <style>
         body {
             margin: 0;
@@ -183,13 +183,11 @@
             display: none;
         }
     </style>
-    <!-- Bibliothèques distantes -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
 </head>
 <body>
 
-    <!-- ÉCRAN DE MENU DE DÉPART -->
     <div id="menu-container">
         <div class="menu-box">
             <h1>STRIKE P2P</h1>
@@ -204,25 +202,22 @@
             <div class="p2p-info">
                 <p>— SECTION MULTIJOUEUR P2P —</p>
                 <div class="input-group">
-                    <label for="peer-id-input">Rejoindre un ami (Entrer son ID) :</label>
-                    <input type="text" id="peer-id-input" placeholder="ID de ton pote...">
+                    <label for="peer-id-input">Rejoindre un ami (Entrer son code à 4 chiffres) :</label>
+                    <input type="text" id="peer-id-input" placeholder="Ex: 4829">
                 </div>
                 <button class="menu-btn" id="btn-Connect" style="background: #3498db;">Se connecter à l'ami</button>
-                <p id="my-id-display" style="margin-top: 15px; font-size: 0.9em; color: #2ecc71; font-weight: bold;"></p>
+                <p id="my-id-display" style="margin-top: 15px; font-size: 1.1em; color: #2ecc71; font-weight: bold;">Génération du code...</p>
             </div>
         </div>
     </div>
 
-    <!-- REPRISE DE SOURIS EN JEU -->
     <div id="game-overlay">
         <h2 style="font-size: 2em; margin-bottom: 10px;">Pause / Mode Fenêtré</h2>
         <p>Clique sur l'écran pour reprendre le contrôle</p>
     </div>
 
-    <!-- VISEUR -->
     <div id="crosshair"></div>
 
-    <!-- HUD DU JOUEUR -->
     <div id="player-profile">
         Joueur : <span id="display-username">...</span>
     </div>
@@ -242,20 +237,46 @@
         let p2pConnection = null;
         let myPeerId = "";
 
-        // --- ENREGISTREMENT ET INITIALISATION DU RÉSEAU P2P ---
-        // On initialise PeerJS immédiatement en arrière-plan pour obtenir notre ID P2P
-        peer = new Peer();
+        // Structure de données pour stocker l'état des touches pressées
+        const keysPressed = { 
+            z: false, w: false, // Avant (Z ou W pour azerty/qwerty)
+            s: false,           // Arrière
+            q: false, a: false, // Gauche
+            d: false            // Droite
+        };
+
+        // Paramètres cinétiques du joueur
+        const moveSpeed = 0.12;
+        let walkTime = 0; // Sert à calculer l'effet de balancement en marchant
+
+        // --- GÉNÉRATION D'UN CODE PIN ULTRA COURT ---
+        function generateShortId() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        const chosenShortId = generateShortId();
+        peer = new Peer(chosenShortId);
 
         peer.on('open', (id) => {
             myPeerId = id;
-            document.getElementById('my-id-display').innerText = "Ton ID de partage : " + id;
-            console.log("Mon ID PeerJS est : " + id);
+            document.getElementById('my-id-display').innerText = "Ton code d'accès : " + id;
+        });
+
+        peer.on('error', (err) => {
+            if (err.type === 'unavailable-id') {
+                const newId = generateShortId();
+                peer = new Peer(newId);
+                peer.on('open', (id) => {
+                    myPeerId = id;
+                    document.getElementById('my-id-display').innerText = "Ton code d'accès (généré à nouveau) : " + id;
+                });
+            }
         });
 
         peer.on('connection', (conn) => {
             p2pConnection = conn;
             setupConnectionEvents();
-            alert("Un joueur s'est connecté à toi ! Préparation du terrain...");
+            alert("Un joueur s'est connecté à toi !");
             startGame();
         });
 
@@ -276,10 +297,9 @@
             validerPseudo();
             const targetId = peerIdInput.value.trim();
             if (targetId === "") {
-                alert("Veuillez entrer l'ID de votre ami pour vous connecter.");
+                alert("Veuillez entrer le code à 4 chiffres de votre ami.");
                 return;
             }
-            // Connexion au pair distant
             p2pConnection = peer.connect(targetId);
             setupConnectionEvents();
             startGame();
@@ -294,13 +314,10 @@
 
         function setupConnectionEvents() {
             p2pConnection.on('open', () => {
-                console.log("Connecté avec succès au pair !");
-                // On envoie notre pseudo à l'autre joueur
                 p2pConnection.send({ type: 'init', pseudo: playerPseudo });
             });
 
             p2pConnection.on('data', (data) => {
-                // Cette zone servira plus tard à recevoir les positions et tirs de l'autre joueur
                 console.log("Données reçues du joueur distant :", data);
             });
         }
@@ -371,7 +388,23 @@
         camera.add(playerWeaponGroup);
         scene.add(camera);
 
-        camera.position.y = 1.6;
+        // Position de base de la caméra
+        camera.position.set(0, 1.6, 0);
+
+        // --- ÉCOUTEURS CLAVIER (DÉPLACEMENTS) ---
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keysPressed) {
+                keysPressed[key] = true;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keysPressed) {
+                keysPressed[key] = false;
+            }
+        });
 
         // --- CONTRÔLES DE LA SOURIS (Pointer Lock API) ---
         gameOverlay.addEventListener('click', () => {
@@ -404,7 +437,6 @@
             camera.rotation.y = yaw;
             camera.rotation.x = pitch;
 
-            // Envoyer notre rotation à l'autre joueur en P2P si connecté
             if (p2pConnection && p2pConnection.open) {
                 p2pConnection.send({
                     type: 'look',
@@ -424,7 +456,6 @@
                 isShooting = true;
                 shootTimer = 0;
                 
-                // Notification P2P de l'action de tir
                 if (p2pConnection && p2pConnection.open) {
                     p2pConnection.send({ type: 'shoot' });
                 }
@@ -445,9 +476,58 @@
             }
         }
 
+        // --- FONCTION DE LOGIQUE DE DÉPLACEMENT ---
+        function updateMovement() {
+            if (!isGameActive || document.pointerLockElement !== document.body) return;
+
+            // Déterminer la direction par rapport à l'orientation de la caméra
+            const forwardVector = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+            const sideVector = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+            
+            let moveDirection = new THREE.Vector3(0, 0, 0);
+
+            // Gestion Z / W (Avant)
+            if (keysPressed.z || keysPressed.w) moveDirection.add(forwardVector);
+            // Gestion S (Arrière)
+            if (keysPressed.s) moveDirection.add(forwardVector.clone().negate());
+            // Gestion Q / A (Gauche)
+            if (keysPressed.q || keysPressed.a) moveDirection.add(sideVector.clone().negate());
+            // Gestion D (Droite)
+            if (keysPressed.d) moveDirection.add(sideVector);
+
+            // Si on se déplace, on applique la vitesse et l'effet visuel de marche
+            if (moveDirection.lengthSq() > 0) {
+                moveDirection.normalize().multiplyScalar(moveSpeed);
+                camera.position.add(moveDirection);
+
+                // Simulation des pas (Head Bobbing)
+                walkTime += 0.2;
+                camera.position.y = 1.6 + Math.sin(walkTime) * 0.03;
+                
+                // Léger balancement latéral supplémentaire de l'arme pendant la course
+                playerWeaponGroup.position.x = Math.cos(walkTime * 0.5) * 0.02;
+            } else {
+                // Retour fluide à la hauteur normale des yeux au repos
+                camera.position.y = THREE.MathUtils.lerp(camera.position.y, 1.6, 0.1);
+            }
+
+            // Envoyer la nouvelle position de notre corps en P2P à l'autre joueur
+            if (p2pConnection && p2pConnection.open) {
+                p2pConnection.send({
+                    type: 'move',
+                    x: camera.position.x,
+                    y: camera.position.y,
+                    z: camera.position.z
+                });
+            }
+        }
+
         // --- BOUCLE DE RENDU ET LOGIQUE ---
         function animate() {
             requestAnimationFrame(animate);
+
+            // Gestion physique des mouvements à chaque frame
+            updateMovement();
 
             if (isGameActive) {
                 if (isShooting) {
@@ -459,7 +539,8 @@
                         playerWeaponGroup.position.set(0, 0, 0);
                         isShooting = false;
                     }
-                } else {
+                } else if (!(keysPressed.z || keysPressed.w || keysPressed.s || keysPressed.q || keysPressed.a || keysPressed.d)) {
+                    // Si immobile, petit balancement d'ambiance (Idle state)
                     const time = Date.now() * 0.002;
                     playerWeaponGroup.position.y = Math.sin(time) * 0.005;
                     playerWeaponGroup.position.x = Math.cos(time * 0.5) * 0.005;
