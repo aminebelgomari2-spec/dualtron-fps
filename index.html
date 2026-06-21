@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mon FPS HTML5 - Déplacements & Multi P2P</title>
+    <title>Mon FPS HTML5 - Multi P2P Amélioré</title>
     <style>
         body {
             margin: 0;
@@ -144,6 +144,25 @@
             display: none;
         }
 
+        /* Zone d'affichage du Code de la Room Créée (En haut, au centre) */
+        #room-code-display {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 12px 25px;
+            border-radius: 5px;
+            border: 2px solid #2ecc71;
+            color: #2ecc71;
+            font-size: 1.2em;
+            font-weight: bold;
+            z-index: 5;
+            display: none;
+            letter-spacing: 1px;
+            box-shadow: 0 0 10px rgba(46, 204, 113, 0.3);
+        }
+
         .bar-container {
             width: 100%;
             background-color: #444;
@@ -182,6 +201,32 @@
             z-index: 10;
             display: none;
         }
+
+        /* Écran d'attente lors de la création d'une room */
+        #waiting-screen {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 90;
+            display: none;
+        }
+
+        .code-box {
+            font-size: 3em;
+            color: #2ecc71;
+            font-weight: bold;
+            background: #222;
+            padding: 10px 30px;
+            border-radius: 8px;
+            border: 2px dashed #2ecc71;
+            margin: 20px 0;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
@@ -197,18 +242,24 @@
                 <input type="text" id="username-input" placeholder="Soldat_Anonyme" maxlength="15">
             </div>
 
-            <button class="menu-btn" id="btn-solo">Jouer en Solo</button>
+            <button class="menu-btn" id="btn-create-room" style="background: #2ecc71; margin-bottom: 10px;">Créer une Partie (Hôte)</button>
 
             <div class="p2p-info">
-                <p>— SECTION MULTIJOUEUR P2P —</p>
+                <p>— OU REJOINDRE UNE PARTIE EXISTANTE —</p>
                 <div class="input-group">
-                    <label for="peer-id-input">Rejoindre un ami (Entrer son code à 4 chiffres) :</label>
+                    <label for="peer-id-input">Entrer le code à 4 chiffres de ton ami :</label>
                     <input type="text" id="peer-id-input" placeholder="Ex: 4829">
                 </div>
-                <button class="menu-btn" id="btn-Connect" style="background: #3498db;">Se connecter à l'ami</button>
-                <p id="my-id-display" style="margin-top: 15px; font-size: 1.1em; color: #2ecc71; font-weight: bold;">Génération du code...</p>
+                <button class="menu-btn" id="btn-Connect" style="background: #3498db;">Rejoindre l'ami</button>
             </div>
         </div>
+    </div>
+
+    <div id="waiting-screen">
+        <h2>Partie créée avec succès !</h2>
+        <p>Donne ce code à ton ami pour qu'il te rejoigne :</p>
+        <div class="code-box" id="waiting-code-display">----</div>
+        <p style="color: #aaa; font-style: italic;">En attente de connexion du deuxième joueur...</p>
     </div>
 
     <div id="game-overlay">
@@ -217,6 +268,8 @@
     </div>
 
     <div id="crosshair"></div>
+
+    <div id="room-code-display">ROOM CODE : <span id="top-room-code">----</span></div>
 
     <div id="player-profile">
         Joueur : <span id="display-username">...</span>
@@ -236,73 +289,96 @@
         let peer = null;
         let p2pConnection = null;
         let myPeerId = "";
+        let isHost = false;
 
-        // Structure de données pour stocker l'état des touches pressées
+        // Structure pour le clavier (Ajout de 'space' pour le saut)
         const keysPressed = { 
-            z: false, w: false, // Avant (Z ou W pour azerty/qwerty)
-            s: false,           // Arrière
-            q: false, a: false, // Gauche
-            d: false            // Droite
+            z: false, w: false, 
+            s: false,           
+            q: false, a: false, 
+            d: false,
+            pointer: false // géré via la souris
         };
+        let spacePressed = false;
 
-        // Paramètres cinétiques du joueur
+        // Paramètres cinétiques et physiques (Saut / Gravité)
         const moveSpeed = 0.12;
-        let walkTime = 0; // Sert à calculer l'effet de balancement en marchant
+        let walkTime = 0; 
+        let velocityY = 0; 
+        const gravity = -0.012; 
+        const jumpForce = 0.28; 
+        let isGrounded = true; 
+        const playerHeight = 1.6;
 
-        // --- GÉNÉRATION D'UN CODE PIN ULTRA COURT ---
-        function generateShortId() {
-            return Math.floor(1000 + Math.random() * 9000).toString();
-        }
+        // Tableau pour stocker les balles actives dans la scène 3D
+        const bullets = [];
+        const bulletSpeed = 0.8;
 
-        const chosenShortId = generateShortId();
-        peer = new Peer(chosenShortId);
-
-        peer.on('open', (id) => {
-            myPeerId = id;
-            document.getElementById('my-id-display').innerText = "Ton code d'accès : " + id;
-        });
-
-        peer.on('error', (err) => {
-            if (err.type === 'unavailable-id') {
-                const newId = generateShortId();
-                peer = new Peer(newId);
-                peer.on('open', (id) => {
-                    myPeerId = id;
-                    document.getElementById('my-id-display').innerText = "Ton code d'accès (généré à nouveau) : " + id;
-                });
-            }
-        });
-
-        peer.on('connection', (conn) => {
-            p2pConnection = conn;
-            setupConnectionEvents();
-            alert("Un joueur s'est connecté à toi !");
-            startGame();
-        });
-
-        // --- CONFIGURATION DU MENU ---
-        const btnSolo = document.getElementById('btn-solo');
+        // --- ENREGISTREMENT DES ENTRÉES DU MENU ---
+        const btnCreateRoom = document.getElementById('btn-create-room');
         const btnConnect = document.getElementById('btn-Connect');
         const usernameInput = document.getElementById('username-input');
         const peerIdInput = document.getElementById('peer-id-input');
         const menuContainer = document.getElementById('menu-container');
+        const waitingScreen = document.getElementById('waiting-screen');
         const gameOverlay = document.getElementById('game-overlay');
 
-        btnSolo.addEventListener('click', () => {
+        // Générateur d'ID court
+        function generateShortId() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // --- LOGIQUE ACTION : CRÉER LA ROOM ---
+        btnCreateRoom.addEventListener('click', () => {
             validerPseudo();
-            startGame();
+            isHost = true;
+            myPeerId = generateShortId();
+            
+            // On initialise le réseau P2P avec ce code spécifique
+            peer = new Peer(myPeerId);
+
+            peer.on('open', (id) => {
+                // On affiche le code sur l'écran d'attente
+                document.getElementById('waiting-code-display').innerText = id;
+                document.getElementById('top-room-code').innerText = id;
+                menuContainer.style.display = 'none';
+                waitingScreen.style.display = 'flex';
+            });
+
+            peer.on('error', (err) => {
+                if (err.type === 'unavailable-id') {
+                    // Si pas de chance, on recrée un code
+                    btnCreateRoom.click();
+                }
+            });
+
+            // Quand le pote se connecte à notre code :
+            peer.on('connection', (conn) => {
+                p2pConnection = conn;
+                setupConnectionEvents();
+                waitingScreen.style.display = 'none';
+                startGame();
+            });
         });
 
+        // --- LOGIQUE ACTION : REJOINDRE LA ROOM ---
         btnConnect.addEventListener('click', () => {
             validerPseudo();
+            isHost = false;
             const targetId = peerIdInput.value.trim();
             if (targetId === "") {
                 alert("Veuillez entrer le code à 4 chiffres de votre ami.");
                 return;
             }
-            p2pConnection = peer.connect(targetId);
-            setupConnectionEvents();
-            startGame();
+
+            // Un joueur qui rejoint se connecte avec un ID anonyme temporaire
+            peer = new Peer();
+            peer.on('open', () => {
+                p2pConnection = peer.connect(targetId);
+                document.getElementById('top-room-code').innerText = targetId;
+                setupConnectionEvents();
+                startGame();
+            });
         });
 
         function validerPseudo() {
@@ -318,7 +394,10 @@
             });
 
             p2pConnection.on('data', (data) => {
-                console.log("Données reçues du joueur distant :", data);
+                if (data.type === 'shoot_spawn') {
+                    // On pourra générer visuellement la balle reçue du joueur distant ici
+                    spawnVisualBullet(data.pos, data.dir);
+                }
             });
         }
 
@@ -329,6 +408,7 @@
                 document.getElementById('crosshair').style.display = 'block';
                 document.getElementById('hud').style.display = 'block';
                 document.getElementById('player-profile').style.display = 'block';
+                document.getElementById('room-code-display').style.display = 'block'; // Affiche le code en haut en jeu !
                 isGameActive = true;
                 document.body.requestPointerLock();
             }, 500);
@@ -362,7 +442,7 @@
         floor.receiveShadow = true;
         scene.add(floor);
 
-        // --- CRÉATION DU BRAS ET DE L'ARME AUTOUR DE LA CAMÉRA ---
+        // --- CRÉATION DU BRAS ET DE L'ARME ---
         const playerWeaponGroup = new THREE.Group();
 
         const armGeo = new THREE.BoxGeometry(0.15, 0.15, 0.6);
@@ -388,29 +468,30 @@
         camera.add(playerWeaponGroup);
         scene.add(camera);
 
-        // Position de base de la caméra
-        camera.position.set(0, 1.6, 0);
+        camera.position.set(0, playerHeight, 0);
 
-        // --- ÉCOUTEURS CLAVIER (DÉPLACEMENTS) ---
+        // --- ÉCOUTEURS CLAVIER (DÉPLACEMENTS & SAUT) ---
         document.addEventListener('keydown', (e) => {
             const key = e.key.toLowerCase();
-            if (key in keysPressed) {
-                keysPressed[key] = true;
+            if (key in keysPressed) keysPressed[key] = true;
+            
+            // Logique de saut avec Espace
+            if (e.code === 'Space' || e.key === ' ') {
+                if (isGrounded && isGameActive) {
+                    velocityY = jumpForce;
+                    isGrounded = false;
+                }
             }
         });
 
         document.addEventListener('keyup', (e) => {
             const key = e.key.toLowerCase();
-            if (key in keysPressed) {
-                keysPressed[key] = false;
-            }
+            if (key in keysPressed) keysPressed[key] = false;
         });
 
-        // --- CONTRÔLES DE LA SOURIS (Pointer Lock API) ---
+        // --- CONTRÔLES SOURIS ---
         gameOverlay.addEventListener('click', () => {
-            if (isGameActive) {
-                document.body.requestPointerLock();
-            }
+            if (isGameActive) document.body.requestPointerLock();
         });
 
         document.addEventListener('pointerlockchange', () => {
@@ -436,17 +517,48 @@
             camera.rotation.order = "YXZ";
             camera.rotation.y = yaw;
             camera.rotation.x = pitch;
-
-            if (p2pConnection && p2pConnection.open) {
-                p2pConnection.send({
-                    type: 'look',
-                    yaw: yaw,
-                    pitch: pitch
-                });
-            }
         });
 
-        // --- ANIMATION DE TIR ---
+        // --- SYSTÈME DE PROJECTILES (BALLES VISIBLES) ---
+        function fireBullet() {
+            // Déterminer la direction face à la caméra
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+
+            // Position de départ de la balle (au niveau de l'arme)
+            const pos = new THREE.Vector3();
+            barrel.getWorldPosition(pos);
+
+            spawnVisualBullet(pos, direction);
+
+            // Alerter le joueur distant via P2P du tir pour qu'il voit la balle aussi
+            if (p2pConnection && p2pConnection.open) {
+                p2pConnection.send({
+                    type: 'shoot_spawn',
+                    pos: { x: pos.x, y: pos.y, z: pos.z },
+                    dir: { x: direction.x, y: direction.y, z: direction.z }
+                });
+            }
+        }
+
+        function spawnVisualBullet(startPos, dirVector) {
+            // Création graphique d'une petite sphère lumineuse jaune/orange pour la balle
+            const bulletGeo = new THREE.SphereGeometry(0.04, 8, 8);
+            const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+            const bulletMesh = new THREE.Mesh(bulletGeo, bulletMat);
+            
+            bulletMesh.position.copy(startPos);
+            scene.add(bulletMesh);
+
+            // On stocke l'objet 3D et son vecteur direction pour l'animer dans la boucle principale
+            bullets.push({
+                mesh: bulletMesh,
+                direction: new THREE.Vector3(dirVector.x, dirVector.y, dirVector.z),
+                lifeTime: 0
+            });
+        }
+
+        // --- ANIMATION DE TIR (CLIC) ---
         let isShooting = false;
         let shootTimer = 0;
 
@@ -455,63 +567,65 @@
             if (e.button === 0 && !isShooting) {
                 isShooting = true;
                 shootTimer = 0;
-                
-                if (p2pConnection && p2pConnection.open) {
-                    p2pConnection.send({ type: 'shoot' });
-                }
+                fireBullet(); // Lance la balle physique et visible !
             }
         });
 
-        // --- GESTION DE LA VIE ---
-        let health = 100;
-        function takeDamage(amount) {
-            health -= amount;
-            if (health < 0) health = 0;
-            
-            document.getElementById('health-bar').style.width = health + '%';
-            document.getElementById('health-val').innerText = health;
+        // --- FONCTION DE LOGIQUE PHYSIQUE (MOUVEMENTS, GRAVITÉ, BALLES) ---
+        function updatePhysics() {
+            if (!isGameActive) return;
 
-            if (p2pConnection && p2pConnection.open) {
-                p2pConnection.send({ type: 'health', value: health });
-            }
-        }
+            // 1. GESTION DE LA GRAVITÉ ET DU SAUT (Seulement si capturé par l'écran)
+            if (document.pointerLockElement === document.body) {
+                velocityY += gravity;
+                camera.position.y += velocityY;
 
-        // --- FONCTION DE LOGIQUE DE DÉPLACEMENT ---
-        function updateMovement() {
-            if (!isGameActive || document.pointerLockElement !== document.body) return;
+                // Collision avec le sol (hauteur minimale de 1.6m)
+                if (camera.position.y <= playerHeight) {
+                    camera.position.y = playerHeight;
+                    velocityY = 0;
+                    isGrounded = true;
+                }
 
-            // Déterminer la direction par rapport à l'orientation de la caméra
-            const forwardVector = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-            const sideVector = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-            
-            let moveDirection = new THREE.Vector3(0, 0, 0);
+                // 2. DÉPLACEMENTS LATÉRAUX / HORIZONTAUX
+                const forwardVector = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const sideVector = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                let moveDirection = new THREE.Vector3(0, 0, 0);
 
-            // Gestion Z / W (Avant)
-            if (keysPressed.z || keysPressed.w) moveDirection.add(forwardVector);
-            // Gestion S (Arrière)
-            if (keysPressed.s) moveDirection.add(forwardVector.clone().negate());
-            // Gestion Q / A (Gauche)
-            if (keysPressed.q || keysPressed.a) moveDirection.add(sideVector.clone().negate());
-            // Gestion D (Droite)
-            if (keysPressed.d) moveDirection.add(sideVector);
+                if (keysPressed.z || keysPressed.w) moveDirection.add(forwardVector);
+                if (keysPressed.s) moveDirection.add(forwardVector.clone().negate());
+                if (keysPressed.q || keysPressed.a) moveDirection.add(sideVector.clone().negate());
+                if (keysPressed.d) moveDirection.add(sideVector);
 
-            // Si on se déplace, on applique la vitesse et l'effet visuel de marche
-            if (moveDirection.lengthSq() > 0) {
-                moveDirection.normalize().multiplyScalar(moveSpeed);
-                camera.position.add(moveDirection);
+                if (moveDirection.lengthSq() > 0) {
+                    moveDirection.normalize().multiplyScalar(moveSpeed);
+                    camera.position.x += moveDirection.x;
+                    camera.position.z += moveDirection.z;
 
-                // Simulation des pas (Head Bobbing)
-                walkTime += 0.2;
-                camera.position.y = 1.6 + Math.sin(walkTime) * 0.03;
-                
-                // Léger balancement latéral supplémentaire de l'arme pendant la course
-                playerWeaponGroup.position.x = Math.cos(walkTime * 0.5) * 0.02;
-            } else {
-                // Retour fluide à la hauteur normale des yeux au repos
-                camera.position.y = THREE.MathUtils.lerp(camera.position.y, 1.6, 0.1);
+                    // Balancement uniquement au sol
+                    if (isGrounded) {
+                        walkTime += 0.2;
+                        camera.position.y = playerHeight + Math.sin(walkTime) * 0.03;
+                        playerWeaponGroup.position.x = Math.cos(walkTime * 0.5) * 0.02;
+                    }
+                }
             }
 
-            // Envoyer la nouvelle position de notre corps en P2P à l'autre joueur
+            // 3. MISE À JOUR DES BALLES (Fait avancer les balles dans la scène)
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                // Fait avancer la balle le long de sa direction de tir
+                b.mesh.position.addScaledVector(b.direction, bulletSpeed);
+                b.lifeTime += 1;
+
+                // On supprime la balle de la scène après 120 frames (environ 2 secondes de vol) pour éviter les lags
+                if (b.lifeTime > 120) {
+                    scene.remove(b.mesh);
+                    bullets.splice(i, 1);
+                }
+            }
+
+            // Émettre la position globale via P2P
             if (p2pConnection && p2pConnection.open) {
                 p2pConnection.send({
                     type: 'move',
@@ -522,12 +636,12 @@
             }
         }
 
-        // --- BOUCLE DE RENDU ET LOGIQUE ---
+        // --- BOUCLE DE RENDU PRINCIPALE ---
         function animate() {
             requestAnimationFrame(animate);
 
-            // Gestion physique des mouvements à chaque frame
-            updateMovement();
+            // Gestion de tous les mouvements et projectiles
+            updatePhysics();
 
             if (isGameActive) {
                 if (isShooting) {
@@ -539,8 +653,7 @@
                         playerWeaponGroup.position.set(0, 0, 0);
                         isShooting = false;
                     }
-                } else if (!(keysPressed.z || keysPressed.w || keysPressed.s || keysPressed.q || keysPressed.a || keysPressed.d)) {
-                    // Si immobile, petit balancement d'ambiance (Idle state)
+                } else if (!(keysPressed.z || keysPressed.w || keysPressed.s || keysPressed.q || keysPressed.a || keysPressed.d) && isGrounded) {
                     const time = Date.now() * 0.002;
                     playerWeaponGroup.position.y = Math.sin(time) * 0.005;
                     playerWeaponGroup.position.x = Math.cos(time * 0.5) * 0.005;
