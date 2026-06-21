@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mon FPS HTML5</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+            user-select: none;
+        }
+
+        /* Viseur au centre */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        /* Barre de vie */
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 250px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #333;
+        }
+
+        .bar-container {
+            width: 100%;
+            background-color: #444;
+            height: 20px;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        #health-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff4b4b, #ff2a2a);
+            transition: width 0.3s ease;
+        }
+
+        #health-text {
+            color: white;
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        /* Instructions au démarrage */
+        #instructions {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            cursor: pointer;
+            z-index: 10;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="instructions">
+        <h1 style="font-size: 3em; margin-bottom: 10px;">MON FPS 3D</h1>
+        <p>Clique pour jouer</p>
+        <p style="font-size: 0.8em; color: #aaa;">Bouge la souris pour regarder autour<br>Clic gauche pour tirer</p>
+    </div>
+
+    <div id="crosshair"></div>
+
+    <div id="hud">
+        <div id="health-text">VIE: <span id="health-val">100</span>%</div>
+        <div class="bar-container">
+            <div id="health-bar"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- CONFIGURATION DE BASE THREE.JS ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a); // Fond sombre gris/bleu
+        scene.fog = new THREE.FogExp2(0x1a1a1a, 0.05);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // --- LUMIÈRES ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+
+        // --- LE SOL (Pour avoir un repère) ---
+        const floorGeo = new THREE.PlaneGeometry(100, 100);
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // --- CRÉATION DU BRAS ET DE L'ARME (ATTACHÉS À LA CAMÉRA) ---
+        const playerWeaponGroup = new THREE.Group();
+
+        // Le bras (couleur chair)
+        const armGeo = new THREE.BoxGeometry(0.15, 0.15, 0.6);
+        const armMat = new THREE.MeshStandardMaterial({ color: 0xe0a98b, roughness: 0.6 });
+        const arm = new THREE.Mesh(armGeo, armMat);
+        arm.position.set(0.25, -0.25, -0.4); // À droite et en bas de l'écran
+        arm.rotation.y = -0.1;
+        playerWeaponGroup.add(arm);
+
+        // L'arme (Fusil générique gris métallique)
+        const gunGeo = new THREE.BoxGeometry(0.1, 0.12, 0.5);
+        const gunMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.2 });
+        const gun = new THREE.Mesh(gunGeo, gunMat);
+        gun.position.set(0.25, -0.15, -0.7); // Devant le bras
+        playerWeaponGroup.add(gun);
+
+        // Canon de l'arme
+        const barrelGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.3);
+        const barrelMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9 });
+        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0.25, -0.13, -0.95);
+        playerWeaponGroup.add(barrel);
+
+        // On ajoute le groupe entier à la caméra pour qu'il suive la vue
+        camera.add(playerWeaponGroup);
+        scene.add(camera);
+
+        // Position de départ de la caméra (hauteur des yeux)
+        camera.position.y = 1.6;
+
+        // --- CONTRÔLES DE LA SOURIS (Pointer Lock API) ---
+        const instructions = document.getElementById('instructions');
+        
+        instructions.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === document.body) {
+                instructions.style.display = 'none';
+            } else {
+                instructions.style.display = 'flex';
+            }
+        });
+
+        // Rotation de la caméra avec la souris
+        let yaw = 0;
+        let pitch = 0;
+        const sensitivity = 0.002;
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement !== document.body) return;
+
+            yaw -= e.movementX * sensitivity;
+            pitch -= e.movementY * sensitivity;
+
+            // On limite la vision verticale pour ne pas se retourner le cou
+            pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
+
+            camera.rotation.order = "YXZ";
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+        });
+
+        // --- ANIMATION DE TIR ---
+        let isShooting = false;
+        let shootTimer = 0;
+
+        document.addEventListener('mousedown', (e) => {
+            if (document.pointerLockElement !== document.body) return;
+            if (e.button === 0 && !isShooting) { // Clic gauche
+                isShooting = true;
+                shootTimer = 0;
+                
+                // Simuler une petite perte de vie à chaque tir pour tester la barre de vie
+                takeDamage(5);
+            }
+        });
+
+        // --- GESTION DE LA VIE ---
+        let health = 100;
+        function takeDamage(amount) {
+            health -= amount;
+            if (health < 0) health = 100; // Reset pour le test
+            
+            document.getElementById('health-bar').style.width = health + '%';
+            document.getElementById('health-val').innerText = health;
+        }
+
+        // --- BOUCLE DE RENDU (ANIMATION) ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Effet d'animation de recul (recoyle) de l'arme quand on tire
+            if (isShooting) {
+                shootTimer += 0.4;
+                if (shootTimer < Math.PI) {
+                    // Recul vers l'arrière et le haut
+                    playerWeaponGroup.position.z = Math.sin(shootTimer) * 0.1;
+                    playerWeaponGroup.position.y = Math.sin(shootTimer) * 0.05;
+                } else {
+                    playerWeaponGroup.position.set(0, 0, 0);
+                    isShooting = false;
+                }
+            } else {
+                // Petit effet de balancement (bobbing) quand on "attend" pour faire réaliste
+                const time = Date.now() * 0.002;
+                playerWeaponGroup.position.y = Math.sin(time) * 0.005;
+                playerWeaponGroup.position.x = Math.cos(time * 0.5) * 0.005;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Ajustement si on redimensionne la fenêtre
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
